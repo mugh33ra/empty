@@ -5,7 +5,7 @@ on: [push, workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 hours max
+    timeout-minutes: 360
     
     steps:
     - name: Install Dependencies
@@ -22,129 +22,65 @@ jobs:
       env:
         NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
 
-    - name: Create SSH User with Password
+    - name: Enable Root Login
       run: |
-        # Create the user if it doesn't exist
-        if id "runneradmin" &>/dev/null; then
-          echo "User runneradmin already exists"
-        else
-          sudo useradd -m -s /bin/bash runneradmin
-        fi
+        # Set root password
+        echo "root:toor123" | sudo chpasswd
         
-        # Set password (consider using GitHub Secrets for production)
-        echo "runneradmin:P@ssw0rd!" | sudo chpasswd
+        # Enable root login with password
+        sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+        sudo sed -i 's/PermitRootLogin no/#PermitRootLogin no/' /etc/ssh/sshd_config
         
-        # Configure SSH for password authentication
+        # Enable password authentication
         sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
         sudo sed -i 's/PasswordAuthentication no/#PasswordAuthentication no/' /etc/ssh/sshd_config
         
-        # Disable root login and allow only runneradmin
-        sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config
-        echo "AllowUsers runneradmin" | sudo tee -a /etc/ssh/sshd_config
-        
-        # Restart SSH service
+        # Restart SSH
         sudo systemctl restart ssh
 
-    - name: Start SSH Service
+    - name: Create SSH Tunnel with Ngrok
       run: |
-        sudo systemctl start ssh
-        sudo systemctl enable ssh
-
-    - name: Create SSH Tunnel with Ngrok and Display Full Command
-      run: |
-        # Start ngrok in background
+        # Start ngrok
         ./ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
         NGROK_PID=$!
         
-        echo "Waiting for ngrok tunnel to establish..."
         sleep 8
         
-        # Get tunnel information from ngrok API
-        MAX_RETRIES=30
-        RETRY_COUNT=0
+        # Get tunnel info
         TUNNEL_INFO=""
-        
-        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ -z "$TUNNEL_INFO" ]; do
+        for i in {1..15}; do
           sleep 2
-          echo "Attempting to get tunnel info (attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)..."
           TUNNEL_INFO=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null || echo "")
-          RETRY_COUNT=$((RETRY_COUNT + 1))
+          [ ! -z "$TUNNEL_INFO" ] && break
         done
         
-        if [ -z "$TUNNEL_INFO" ]; then
-          echo "Error: Failed to get ngrok tunnel information"
-          echo "Ngrok log output:"
-          cat ngrok.log
-          exit 1
-        fi
-        
-        # Extract the public URL using jq
         NGROK_HOST=$(echo $TUNNEL_INFO | jq -r '.tunnels[0].public_url' 2>/dev/null | sed 's/tcp:\/\///')
-        
-        if [ -z "$NGROK_HOST" ] || [ "$NGROK_HOST" = "null" ]; then
-          echo "Error: Could not extract ngrok host from API response"
-          echo "API Response: $TUNNEL_INFO"
-          exit 1
-        fi
-        
-        # Split host and port
         NGROK_DOMAIN=$(echo $NGROK_HOST | cut -d':' -f1)
         NGROK_PORT=$(echo $NGROK_HOST | cut -d':' -f2)
         
         echo "======================================================"
-        echo "            SSH TUNNEL ESTABLISHED!                   "
+        echo "                    ROOT ACCESS                       "
         echo "======================================================"
         echo ""
-        echo "FULL SSH COMMAND:"
-        echo "ssh runneradmin@$NGROK_DOMAIN -p $NGROK_PORT"
+        echo "FULL ROOT SSH COMMAND:"
+        echo "ssh root@$NGROK_DOMAIN -p $NGROK_PORT"
         echo ""
-        echo "DETAILS:"
-        echo "Username: runneradmin"
-        echo "Password: P@ssw0rd!"
+        echo "ROOT CREDENTIALS:"
+        echo "Username: root"
+        echo "Password: toor123"
+        echo ""
         echo "Host: $NGROK_DOMAIN"
         echo "Port: $NGROK_PORT"
         echo ""
-        echo "ALTERNATIVE FORMAT:"
-        echo "Host: $NGROK_HOST"
-        echo "User: runneradmin"
-        echo ""
-        echo "This tunnel will remain active for up to 6 hours."
-        echo "The workflow will automatically stop after 6 hours."
-        echo ""
         echo "======================================================"
-        echo "To connect now, run this exact command in your terminal:"
-        echo "======================================================"
-        echo "ssh runneradmin@$NGROK_DOMAIN -p $NGROK_PORT"
+        echo "Connect now: ssh root@$NGROK_DOMAIN -p $NGROK_PORT"
         echo "======================================================"
         
-        # Keep the workflow running for 6 hours (360 minutes)
-        # But check every minute if ngrok is still running
-        echo "Keeping tunnel active. Press Ctrl+C in GitHub Actions to stop early."
-        
+        # Keep running
         for i in {1..360}; do
-          # Check if ngrok is still running
-          if ! kill -0 $NGROK_PID 2>/dev/null; then
-            echo "Ngrok process has stopped. Exiting..."
-            break
-          fi
-          
-          # Every 5 minutes, show the connection info again
-          if [ $((i % 5)) -eq 0 ]; then
-            echo "[$(date '+%H:%M:%S')] Tunnel still active. Time elapsed: ${i} minutes"
-            echo "Connect with: ssh runneradmin@$NGROK_DOMAIN -p $NGROK_PORT"
-          fi
-          
           sleep 60
+          if [ $((i % 5)) -eq 0 ]; then
+            echo "[$(date '+%H:%M:%S')] Tunnel active: ${i} minutes"
+            echo "Connect: ssh root@$NGROK_DOMAIN -p $NGROK_PORT"
+          fi
         done
-        
-        echo "6-hour limit reached or tunnel stopped. Shutting down..."
-        kill $NGROK_PID 2>/dev/null || true
-
-    - name: Cleanup (Optional)
-      if: always()
-      run: |
-        echo "Cleaning up..."
-        # Kill any remaining ngrok processes
-        pkill -f ngrok || true
-        # Remove the user (optional - comment out if you want to keep)
-        # sudo userdel -r runneradmin 2>/dev/null || true
