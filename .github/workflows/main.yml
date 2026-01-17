@@ -65,7 +65,7 @@ jobs:
         echo "FULL ROOT SSH COMMAND:"
         echo "ssh root@$NGROK_DOMAIN -p $NGROK_PORT"
         echo ""
-        echo "ROOT CREDENTIALS:"
+        echo "ROOT CREDENTIAL:"
         echo "Username: root"
         echo "Password: toor123"
         echo ""
